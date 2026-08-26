@@ -1,5 +1,8 @@
 """Test has selectors."""
+import tracemalloc
+import warnings
 from .. import util
+import soupsieve as sv
 from soupsieve import SelectorSyntaxError
 
 
@@ -140,9 +143,32 @@ class TestHas(util.TestCase):
         )
 
     def test_has_empty(self):
-        """Test has with empty slot due to multiple commas."""
+        """Test has with empty slot due to no selectors."""
 
         self.assert_raises('div:has()', SelectorSyntaxError)
+        self.assert_raises('div:has(,a)', SelectorSyntaxError)
+        self.assert_raises('div:has(a,)', SelectorSyntaxError)
+        self.assert_raises('div:has(a,,a)', SelectorSyntaxError)
+
+    def test_has_excessive_empty_slots(self):
+        """Test a long run of empty `:has()` slots is rejected without allocating a selector per slot."""
+
+        # `:has(,,,,...)` used to create a selector object for every empty slot before
+        # finally reporting the syntax error, so the input size alone dictated memory use.
+        pattern = 'div:has({})'.format(',' * 250000)
+
+        tracemalloc.start()
+        try:
+            with self.assertRaises(SelectorSyntaxError):
+                sv.compile(pattern)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+        # 250,000 slots cost well over 100 MB before the fix; the rejected parse should
+        # now only hold the pattern and its error context.
+        warnings.warn('SEAL-MEASURE has_excessive_empty_slots peak={}'.format(peak))
+        self.assertLess(peak, 16 * 1024 * 1024)
 
     def test_invalid_incomplete_has(self):
         """Test `:has()` fails with just a combinator."""

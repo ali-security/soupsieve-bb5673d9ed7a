@@ -5,6 +5,8 @@ import copy
 import random
 import pytest
 import pickle
+import tracemalloc
+import warnings
 
 
 class TestSoupSieve(util.TestCase):
@@ -589,6 +591,83 @@ class TestInvalid(util.TestCase):
 
         with self.assertRaises(TypeError):
             sv.filter('div', "not a tag", flags=flags)
+
+    def test_excessive_selectors(self):
+        """Test excessive selectors."""
+
+        # Build a large selector string: "a,a,a,...,a"
+        count = 10000
+        selector = ",".join("a" for _ in range(count))
+
+        # Compile the selector
+        with self.assertRaises(ValueError):
+            sv.compile(selector)
+
+    def test_excessive_selectors_memory(self):
+        """Test that a huge selector list is rejected instead of allocating a selector per item."""
+
+        # The reported proof of concept: a 500 KB selector string of 250,000 items,
+        # which allocated roughly 244 MB of `Selector` objects before the fix.
+        selector = ",".join("a" for _ in range(250000))
+
+        tracemalloc.start()
+        try:
+            with self.assertRaises(ValueError):
+                sv.compile(selector)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+        # The parse now stops at the selector limit, so memory no longer scales with input size.
+        warnings.warn('SEAL-MEASURE excessive_selectors peak={}'.format(peak))
+        self.assertLess(peak, 32 * 1024 * 1024)
+
+    def test_excessive_group_selectors(self):
+        """Test excessive selectors in `:is()` and `:where()`."""
+
+        count = 10000
+        selector = ':is({})'.format("," * count)
+
+        # Compile the selector
+        with self.assertRaises(ValueError):
+            sv.compile(selector)
+
+        selector = ':where({})'.format("," * count)
+
+        # Compile the selector
+        with self.assertRaises(ValueError):
+            sv.compile(selector)
+
+    def test_excessive_custom_selectors(self):
+        """Test excessive custom selectors."""
+
+        # Build a large selector string: "a,a,a,...,a"
+        count = 10000
+        selector = ",".join("a" for _ in range(count))
+
+        # Compile the selector
+        with self.assertRaises(ValueError):
+            sv.compile('div:--custom', custom={':--custom': selector})
+
+    def test_excessive_custom_and_normal_selectors(self):
+        """Test excessive custom and normal selectors."""
+
+        count = 5000
+        selector = ",".join("a" for _ in range(count))
+
+        # Compile the selector
+        with self.assertRaises(ValueError):
+            sv.compile(':is({}):--custom'.format(selector), custom={':--custom': selector})
+
+    def test_reasonable_selectors_still_compile(self):
+        """Test that a selector well under the limit is not rejected."""
+
+        count = 100
+        selector = ",".join("a" for _ in range(count))
+        self.assertEqual(count, len(sv.compile(selector).selectors))
+
+        # Empty slots in a forgiving pseudo-class are counted, but not over-counted.
+        self.assertEqual(1, len(sv.compile(':is({})'.format("," * count)).selectors))
 
 
 class TestSyntaxErrorReporting(util.TestCase):
