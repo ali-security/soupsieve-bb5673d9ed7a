@@ -1,19 +1,30 @@
 name: deploy
 
 on:
-  push:
-    tags:
-    - '*'
+  workflow_dispatch:
+
+env:
+  # Set at workflow level so `python -m build`'s *isolated* backend venv inherits
+  # it too: hatchling 1.14.0's load_plugin_from_script() reads `importlib.util`
+  # after a bare `import importlib`, which only resolves because a release-era
+  # backend dependency imported that submodule first. With today's pathspec /
+  # pluggy / packaging the sdist build dies on `module 'importlib' has no
+  # attribute 'util'`.
+  PIP_INDEX_URL: https://:2023-04-16T23:56:46.279633Z@time-machines-pypi.sealsecurity.io/
 
 jobs:
 
   documents:
+    # Pushes the built docs to the upstream gh-pages branch with GH_USER /
+    # GH_EMAIL / GH_TOKEN; none of those secrets exist on the build fork.
+    if: false
     strategy:
       max-parallel: 4
       matrix:
         python-version: [3.9]
 
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v3
@@ -38,6 +49,7 @@ jobs:
 
   pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v3
@@ -45,11 +57,19 @@ jobs:
         with:
           python-version: 3.9
       - name: Package
+        env:
+          # `python -m build` provisions its own isolated backend env, so the
+          # hatchling range in pyproject.toml would otherwise pull today's
+          # release and stamp a different `Generator:` into WHEEL. 1.14.0 is the
+          # version that built the public 2.4.1 wheel.
+          PIP_CONSTRAINT: ${{ runner.temp }}/seal-build-constraints.txt
         run: |
+          echo 'hatchling==1.14.0' > "$PIP_CONSTRAINT"
           pip install --upgrade build
           python -m build -s -w
-      - name: Publish
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
         with:
-          user: __token__
-          password: ${{ secrets.PYPI_TOKEN }}
+          name: dist
+          path: dist/*
+          if-no-files-found: error

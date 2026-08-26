@@ -1,14 +1,13 @@
 name: build
 
 on:
-  push:
-    branches:
-      - 'main'
-    tags:
-    - '**'
-  pull_request:
-    branches:
-    - '**'
+  workflow_dispatch:
+
+env:
+  # Resolve every pip dependency as it existed at the 2.4.1 release date so the
+  # unpinned requirements/*.txt files cannot drift into versions that postdate
+  # the release (newest mypy/pytest do not support this project's Python floor).
+  PIP_INDEX_URL: https://:2023-04-16T23:56:46.279633Z@time-machines-pypi.sealsecurity.io/
 
 jobs:
   tests:
@@ -25,20 +24,29 @@ jobs:
           - tox-env: py38
             python-version: 3.8
             continue-on-error: false
+          # 3.9/3.10/3.11 are pinned to the patch release current at soupsieve
+          # 2.4.1's release date. Floating the patch gave the ubuntu legs
+          # CPython 3.11.16, whose html.parser no longer parses <iframe> content
+          # into elements, failing the eight test_iframe cases in
+          # test_root/test_default/test_dir/test_indeterminate; the windows legs
+          # resolved 3.11.9 and passed. Pinning reproduces the interpreter
+          # upstream CI actually ran and keeps every leg on identical behaviour.
+          # 3.9 pins to .13 rather than .16: it is the last 3.9 with an official
+          # Windows binary, so the windows legs stay on a prebuilt interpreter.
           - tox-env: py39
-            python-version: 3.9
+            python-version: '3.9.13'
             continue-on-error: false
           - tox-env: py310
-            python-version: '3.10'
+            python-version: '3.10.11'
             continue-on-error: false
           - tox-env: py311
-            python-version: '3.11'
+            python-version: '3.11.3'
             continue-on-error: false
           - tox-env: nolxml
-            python-version: '3.11'
+            python-version: '3.11.3'
             continue-on-error: false
           - tox-env: nohtml5lib
-            python-version: '3.10'
+            python-version: '3.10.11'
             continue-on-error: false
         # exclude:
         #   - platform: windows-latest
@@ -48,14 +56,20 @@ jobs:
       TOXENV: ${{ matrix.tox-env }}
 
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v3
     - name: Set up Python ${{ matrix.python-version }}
       if: "!endsWith(matrix.python-version, '-dev')"
-      uses: actions/setup-python@v4
+      # actions/setup-python has no 3.7/3.8 build in its manifest for the
+      # current ubuntu-latest image; this drop-in resolves a prebuilt where one
+      # exists and builds the interpreter otherwise, so no matrix leg is dropped.
+      uses: MatteoH2O1999/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
+        cache-build: true
+        allow-build: allow
     - name: Set up development Python ${{ matrix.python-version }}
       if: endsWith(matrix.python-version, '-dev')
       uses: deadsnakes/action@v2.1.1
@@ -67,15 +81,6 @@ jobs:
     - name: Test
       run: |
         python -m tox
-      continue-on-error: ${{ matrix.continue-on-error }}
-    - name: Upload Results
-      if: success()
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: ${{ matrix.platform }}-${{ matrix.tox-env }}
-        fail_ci_if_error: false
 
   lint:
     strategy:
@@ -87,6 +92,7 @@ jobs:
       TOXENV: lint
 
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v3
@@ -111,6 +117,7 @@ jobs:
       TOXENV: documents
 
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v3
